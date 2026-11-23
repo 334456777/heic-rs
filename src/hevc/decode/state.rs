@@ -77,6 +77,35 @@ pub struct Dec<'a> {
     pub stat_coeff: [i32; 4],
 }
 
+/// A block as clause 6.4.1 compares its neighbours with it
+/// ([`Dec::neighbourhood`]): what does not depend on the neighbour, worked
+/// out once for all of a block's.
+pub struct Neighbourhood<'g> {
+    geo: &'g Geometry,
+    slice_addr: &'g [u32],
+    width: usize,
+    height: usize,
+    /// The block's address in z-scan order.
+    z: u32,
+    /// The raster address of its coding tree block.
+    ctb: usize,
+}
+
+impl Neighbourhood<'_> {
+    /// [`Dec::available`] of the block covering `(xn, yn)`. A neighbour in
+    /// the same coding tree block is in the same tile and slice.
+    #[inline]
+    pub fn available(&self, xn: usize, yn: usize) -> bool {
+        if xn >= self.width || yn >= self.height || self.geo.z(xn, yn) > self.z {
+            return false;
+        }
+        let a = self.geo.ctb_rs(xn, yn);
+        a == self.ctb
+            || (self.geo.tile_id[a] == self.geo.tile_id[self.ctb]
+                && self.slice_addr[a] == self.slice_addr[self.ctb])
+    }
+}
+
 impl<'a> Dec<'a> {
     /// True when the block covering `(xn, yn)` is available for prediction
     /// from the block at `(xc, yc)` (clause 6.4.1).
@@ -84,16 +113,21 @@ impl<'a> Dec<'a> {
         if xn < 0 || yn < 0 {
             return false;
         }
-        let (xn, yn) = (xn as usize, yn as usize);
-        if xn >= self.sps.width || yn >= self.sps.height {
-            return false;
+        self.neighbourhood(xc, yc)
+            .available(xn as usize, yn as usize)
+    }
+
+    /// The block at `(xc, yc)` as [`Self::available`] compares its
+    /// neighbours with it, for asking about many of them.
+    pub fn neighbourhood(&self, xc: usize, yc: usize) -> Neighbourhood<'_> {
+        Neighbourhood {
+            geo: self.geo,
+            slice_addr: &self.fi.slice_addr,
+            width: self.sps.width,
+            height: self.sps.height,
+            z: self.geo.z(xc, yc),
+            ctb: self.geo.ctb_rs(xc, yc),
         }
-        if self.geo.z(xn, yn) > self.geo.z(xc, yc) {
-            return false;
-        }
-        let a = self.geo.ctb_rs(xn, yn);
-        let b = self.geo.ctb_rs(xc, yc);
-        self.geo.tile_id[a] == self.geo.tile_id[b] && self.fi.slice_addr[a] == self.fi.slice_addr[b]
     }
 
     /// `IntraPredModeY` recorded for luma position `(x, y)`.

@@ -32,6 +32,7 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
         d.sps.bit_depth_c
     };
     let (xc, yc) = (x * sw, y * sh);
+    let near = d.neighbourhood(xc, yc);
     let total = 4 * n + 1;
     let (stride, data) = (plane.stride, plane.data.as_slice());
     let mut r = Refs::new(n);
@@ -59,7 +60,7 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
                 all = false;
                 break;
             }
-            if d.available(xc, yc, (col * sw) as isize, (yy * sh) as isize) {
+            if near.available(col * sw, yy * sh) {
                 let end = (yy + step_y).min(plane.height).min(y + 2 * n);
                 for (j, yj) in (yy..end).enumerate() {
                     r.buf[2 * n - 1 - k - j] = data[yj * stride + col];
@@ -75,8 +76,7 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
     }
 
     // Index 2n is the corner p[-1][-1].
-    if left_in && above_in && d.available(xc, yc, ((x - 1) * sw) as isize, ((y - 1) * sh) as isize)
-    {
+    if left_in && above_in && near.available((x - 1) * sw, (y - 1) * sh) {
         r.buf[2 * n] = data[(y - 1) * stride + x - 1];
         avail[2 * n] = true;
     } else {
@@ -93,7 +93,7 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
                 all = false;
                 break;
             }
-            if d.available(xc, yc, (xx * sw) as isize, ((y - 1) * sh) as isize) {
+            if near.available(xx * sw, (y - 1) * sh) {
                 let end = (xx + step_x).min(plane.width).min(x + 2 * n);
                 // A plain loop: the run is two or four samples, for which a
                 // library copy is all call overhead.
