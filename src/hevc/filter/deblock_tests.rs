@@ -227,3 +227,88 @@ fn horizontal_edge_is_the_transpose_of_the_vertical_one() {
         }
     }
 }
+
+/// One luma line filtered on its own, as clause 8.7.2.5.7 reads: `sm` is `p3,p2,p1,p0,q0,q1,q2,q3`.
+fn line_reference(sm: &[i32; 8], de: u8, dep: bool, deq: bool, tc: i32, max: i32) -> [i32; 8] {
+    let mut o = *sm;
+    let (p3, p2, p1, p0) = (sm[0], sm[1], sm[2], sm[3]);
+    let (q0, q1, q2, q3) = (sm[4], sm[5], sm[6], sm[7]);
+    if de == 2 {
+        o[3] = clip3(
+            p0 - 2 * tc,
+            p0 + 2 * tc,
+            (p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3,
+        );
+        o[2] = clip3(p1 - 2 * tc, p1 + 2 * tc, (p2 + p1 + p0 + q0 + 2) >> 2);
+        o[1] = clip3(
+            p2 - 2 * tc,
+            p2 + 2 * tc,
+            (2 * p3 + 3 * p2 + p1 + p0 + q0 + 4) >> 3,
+        );
+        o[4] = clip3(
+            q0 - 2 * tc,
+            q0 + 2 * tc,
+            (p1 + 2 * p0 + 2 * q0 + 2 * q1 + q2 + 4) >> 3,
+        );
+        o[5] = clip3(q1 - 2 * tc, q1 + 2 * tc, (p0 + q0 + q1 + q2 + 2) >> 2);
+        o[6] = clip3(
+            q2 - 2 * tc,
+            q2 + 2 * tc,
+            (p0 + q0 + q1 + 3 * q2 + 2 * q3 + 4) >> 3,
+        );
+    } else if de == 1 {
+        let raw = (9 * (q0 - p0) - 3 * (q1 - p1) + 8) >> 4;
+        if raw.abs() < tc * 10 {
+            let d = clip3(-tc, tc, raw);
+            o[3] = clip3(0, max, p0 + d);
+            o[4] = clip3(0, max, q0 - d);
+            if dep {
+                let dv = clip3(-(tc >> 1), tc >> 1, (((p2 + p0 + 1) >> 1) - p1 + d) >> 1);
+                o[2] = clip3(0, max, p1 + dv);
+            }
+            if deq {
+                let dv = clip3(-(tc >> 1), tc >> 1, (((q2 + q0 + 1) >> 1) - q1 - d) >> 1);
+                o[5] = clip3(0, max, q1 + dv);
+            }
+        }
+    }
+    o
+}
+
+/// The four lines filtered side by side give what each line filtered alone gives, for random samples around an edge
+/// (some smooth, so that the filters change them), every filter decision and tc up to the largest at 10 bits.
+#[test]
+fn lines_filtered_together_match_each_filtered_alone() {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move |n: u32| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % u64::from(n)) as i32
+    };
+    for _ in 0..50_000 {
+        let bits = if next(4) == 0 { 10 } else { 8 };
+        let max = (1 << bits) - 1;
+        let spread = [2, 8, 40, max][next(4) as usize];
+        let base = next(max as u32 + 1);
+        let mut t: Taps = [[0; 4]; 8];
+        for tap in &mut t {
+            for v in tap.iter_mut() {
+                *v = (base + next(2 * spread as u32 + 1) - spread).clamp(0, max);
+            }
+        }
+        let (de, dep, deq) = (next(3) as u8, next(2) == 0, next(2) == 0);
+        let tc = next(25) << (bits - 8);
+        let got = filter_lines(&t, de, dep, deq, tc, max);
+        for i in 0..4 {
+            let line: [i32; 8] = std::array::from_fn(|j| t[j][i]);
+            let want = line_reference(&line, de, dep, deq, tc, max);
+            for j in 0..8 {
+                assert_eq!(
+                    got[j][i], want[j],
+                    "line {i} tap {j}: {line:?} de {de} tc {tc}"
+                );
+            }
+        }
+    }
+}
