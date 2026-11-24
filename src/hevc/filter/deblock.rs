@@ -9,6 +9,10 @@ use crate::hevc::picture::{Picture, edge, flags};
 #[path = "deblock_chroma.rs"]
 mod chroma;
 
+#[cfg(target_arch = "x86_64")]
+#[path = "deblock_sse2.rs"]
+mod sse2;
+
 /// `beta'` of Table 8-12, indexed by `Q` in `0..=51`.
 const BETA_TABLE: [i32; 52] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
@@ -163,7 +167,47 @@ fn luma_segment(pic: &mut Picture, info: &FilterInfo, ver: bool, e: usize, s: us
     );
     let tc = TC_TABLE[qtc as usize] * scale;
     let seg = Seg::new(pic.y.stride, ver, e, s, 4);
-    let data = &mut pic.y.data;
+    let max = (1i32 << info.bit_depth_y) - 1;
+    let edge = Edge {
+        ver,
+        beta,
+        tc,
+        locked: (pl, ql),
+        max,
+    };
+    #[cfg(target_arch = "x86_64")]
+    if info.bit_depth_y <= sse2::MAX_BIT_DEPTH {
+        sse2::luma_lines(&mut pic.y.data, &seg, &edge);
+        return;
+    }
+    luma_lines(&mut pic.y.data, &seg, &edge);
+}
+
+/// What the filter of one luma segment needs to know besides its samples.
+pub(super) struct Edge {
+    /// Whether the edge is vertical.
+    pub ver: bool,
+    /// `beta` of clause 8.7.2.5.3, at the bit depth of the samples.
+    pub beta: i32,
+    /// `tC` of clause 8.7.2.5.3, at the bit depth of the samples.
+    pub tc: i32,
+    /// Whether the P and the Q side keep their samples (clause 8.7.2.5.7).
+    pub locked: (bool, bool),
+    /// The largest sample value.
+    pub max: i32,
+}
+
+/// Decides and filters the four lines of a luma segment, clauses 8.7.2.5.3 and
+/// 8.7.2.5.7: the portable form of [`sse2::luma_lines`].
+fn luma_lines(data: &mut [u16], seg: &Seg, edge: &Edge) {
+    let Edge {
+        ver,
+        beta,
+        tc,
+        locked: (pl, ql),
+        max,
+    } = *edge;
+
     // A line of a vertical edge's segment is its eight taps side by side, and a tap of a horizontal edge's is its
     // four lines side by side: each is read as one slice.
     let mut t: Taps = [[0; 4]; 8];
@@ -200,7 +244,6 @@ fn luma_segment(pic: &mut Picture, info: &FilterInfo, ver: bool, e: usize, s: us
     };
     let thr = (beta + (beta >> 1)) >> 3;
     let (dep, deq) = (dp0 + dp3 < thr, dq0 + dq3 < thr);
-    let max = (1i32 << info.bit_depth_y) - 1;
     let o = filter_lines(&t, de, dep, deq, tc, max);
     // Only p2..q2 can change, and a locked side keeps its samples.
     let (lo, hi) = (if pl { 4 } else { 1 }, if ql { 4 } else { 7 });

@@ -9,14 +9,14 @@
 
 **The pure-Rust HEIC / HEIF image decoder.**
 
-No C toolchain. No `unsafe`. `no_std`-friendly, wasm-ready, MIT OR Apache-2.0 —
+No C toolchain. `unsafe` only in the SSE2 kernels. `no_std`-friendly, wasm-ready, MIT OR Apache-2.0 —
 and **4.28× faster** than the AGPL alternative on a real photograph.
 
 [![crates.io](https://img.shields.io/crates/v/heic-rs.svg?style=flat-square&color=12B981)](https://crates.io/crates/heic-rs)
 [![docs.rs](https://img.shields.io/docsrs/heic-rs?style=flat-square)](https://docs.rs/heic-rs)
 [![CI](https://img.shields.io/github/actions/workflow/status/tbraun96/heic-rs/ci.yml?style=flat-square&label=CI)](https://github.com/tbraun96/heic-rs/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg?style=flat-square)](#license)
-[![unsafe](https://img.shields.io/badge/unsafe-forbidden-12B981.svg?style=flat-square)](#why-pure-rust)
+[![unsafe](https://img.shields.io/badge/unsafe-SSE2%20kernels%20only-12B981.svg?style=flat-square)](#why-pure-rust)
 [![no_std](https://img.shields.io/badge/no__std-%2B%20alloc-6E6880.svg?style=flat-square)](#no_std-and-wasm)
 
 [**certified.sh**](https://certified.sh) &nbsp;·&nbsp;
@@ -32,8 +32,8 @@ and **4.28× faster** than the AGPL alternative on a real photograph.
 **What it is.** `heic-rs` reads the HEIC and HEIF files an iPhone or a Mac produces — the ISOBMFF
 container, the HEVC still-picture bitstream inside it, the grid of tiles a photograph is stored as,
 the rotation and the colour — and gives you RGB, RGBA, BGR, grey or 16-bit pixels. All of it is
-Rust. There is no `libheif`, no `libde265`, no `cmake`, no `build.rs` that shells out, and no
-`unsafe` block anywhere in the chain.
+Rust. There is no `libheif`, no `libde265`, no `cmake` and no `build.rs` that shells out, and
+`unsafe` appears only in the vector loads and stores of the x86-64 SSE2 kernels.
 
 **Why it exists.** Decoding HEIC in Rust used to mean one of two things: bind to the C library
 `libheif` and inherit both a C toolchain and, in practice, GPL-encumbered codec plugins; or use the
@@ -86,8 +86,7 @@ chart.
 
 ## Status
 
-The crate decodes HEIC files to pixels, end to end, with no C and no `unsafe` anywhere in the
-chain:
+The crate decodes HEIC files to pixels, end to end, with no C anywhere in the chain:
 
 - ISOBMFF box parsing, `ftyp` brand handling.
 - `meta` and its children: `hdlr`, `pitm`, `iinf`/`infe`, `iref`, `iprp`/`ipco`/`ipma`, `iloc`, `idat`.
@@ -109,8 +108,10 @@ range extensions — comes back as `Error::Unsupported` naming that tool, never 
 - **No C toolchain.** No `cmake`, no `pkg-config`, no `libheif`, no vendored C sources, no build
   script that shells out. `cargo build` is the whole story, which means the crate cross-compiles and
   vendors trivially.
-- **`#![forbid(unsafe_code)]`.** Enforced at the crate root, not by convention. A parser bug is a
-  wrong answer or a panic, not a memory-safety vulnerability.
+- **`#![deny(unsafe_code)]`.** Enforced at the crate root, not by convention. Only the x86-64 SSE2
+  kernels (the luma deblocking filter) allow it, for their vector loads and stores of exactly the
+  slices they are given; tests hold each kernel to the portable code it stands in for, which every
+  other target runs. A parser bug is a wrong answer or a panic, not a memory-safety vulnerability.
 - **Wasm-ready.** The core is `no_std` + `alloc`; `wasm32-unknown-unknown` is a checked CI target.
 - **Permissive licence.** MIT OR Apache-2.0, the ordinary Rust dual licence, with no copyleft
   obligations flowing into your binary.
@@ -119,7 +120,7 @@ range extensions — comes back as `Error::Unsupported` naming that tool, never 
 
 | Crate | Language | Licence | unsafe | wasm | C toolchain needed |
 |---|---|---|---|---|---|
-| `heic-rs` | Rust | MIT OR Apache-2.0 | none (`#![forbid(unsafe_code)]`) | yes | no |
+| `heic-rs` | Rust | MIT OR Apache-2.0 | SSE2 loads and stores only (`#![deny(unsafe_code)]` elsewhere) | yes | no |
 | `libheif-rs` | Rust bindings to C `libheif` | LGPL-3.0 for the library, and in practice GPL-encumbered codec plugins | yes, FFI throughout | no | yes |
 | `heic` (imazen) | pure Rust | AGPL-3.0 | — | — | no |
 | Browser (`<img>`, `createImageBitmap`) | — | — | — | — | — |
@@ -274,7 +275,7 @@ only and never reaches your build.
 
 ## Security
 
-HEIF files are untrusted input; treat them that way. The crate is `#![forbid(unsafe_code)]`, library
+HEIF files are untrusted input; treat them that way. The crate is `#![deny(unsafe_code)]` outside its SSE2 kernels, library
 code contains no `unwrap`/`expect`/`panic!`, and every parser is bounds-checked and reports
 `Error::Truncated` or `Error::Malformed` rather than reading past a buffer.
 
@@ -445,10 +446,9 @@ decode rather than several times the whole budget.
 **What is left.** The remaining cost is the interleaved narrow store. Grey output, which writes one
 byte per pixel, runs at 6.9 Gpx/s — five times the RGB rate — on exactly the same matrix, so the
 matrix is not what the RGB cases are waiting for; the three- and four-byte interleaved writes are.
-Removing that would mean hand-written NEON and SSE with `unsafe` (or `core::arch` intrinsics, which
-are `unsafe` to call), and `#![forbid(unsafe_code)]` is a promise this crate keeps. Portable SIMD
-would remove it safely, and is nightly-only today; when `std::simd` stabilises, the kernels in
-`src/color/kernel.rs` are where it goes.
+Removing that would mean hand-written NEON and SSE kernels in `src/color/kernel.rs`, written the way
+the decoder's SSE2 kernels are: `unsafe` allowed in that module alone, for its loads and stores, and
+held by tests to the portable code. Portable SIMD would remove it safely, and is nightly-only today.
 
 The conversion is fixed point, and says so: every channel is within **one least significant bit** of
 the same conversion in `f32`. `tests/color_fixed.rs` holds a float reference and asserts that bound
@@ -525,8 +525,8 @@ Not supported, and reported as `Error::Unsupported` with a message naming the re
 ## Questions people ask
 
 **Is there a pure-Rust HEIC decoder?** Yes — this one. `heic-rs` implements the ISOBMFF/HEIF
-container and the HEVC still-picture decoder itself, in Rust, with `#![forbid(unsafe_code)]` at the
-crate root. There is one other pure-Rust decoder, `heic` by imazen, and it is AGPL-3.0; everything
+container and the HEVC still-picture decoder itself, in Rust, with `#![deny(unsafe_code)]` at the
+crate root and `unsafe` allowed only in its SSE2 kernels. There is one other pure-Rust decoder, `heic` by imazen, and it is AGPL-3.0; everything
 else is a binding to the C library `libheif`.
 
 **Can I decode HEIC in WebAssembly?** Yes. The core is `no_std` + `alloc`, and
@@ -568,7 +568,7 @@ and 60. See [correctness](#correctness).
 Picture profiles.
 
 **Is it safe to point at a file from the internet?** That is what it is built for — see
-[security](#security). The crate is `#![forbid(unsafe_code)]`, library code contains no
+[security](#security). The crate is `#![deny(unsafe_code)]` outside its SSE2 kernels, library code contains no
 `unwrap`/`expect`/`panic!`, and `DecodeOptions::max_pixels` caps the allocation before it happens.
 
 ## Who builds this

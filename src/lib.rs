@@ -1,7 +1,8 @@
 //! A pure-Rust decoder for HEIC and HEIF still images.
 //!
-//! No C, no `unsafe`, one optional dependency, and a `no_std` core that
-//! builds for `wasm32-unknown-unknown` with no dependencies at all.
+//! No C, `unsafe` only in the x86-64 SSE2 kernels, one optional dependency,
+//! and a `no_std` core that builds for `wasm32-unknown-unknown` with no
+//! dependencies at all.
 //!
 //! # Status
 //!
@@ -9,7 +10,15 @@
 //! properties, `grid` derivation and tile compositing, transforms, EXIF and
 //! ICC extraction, YCbCr to RGB conversion, and the HEVC still-picture intra
 //! decoder in [`hevc`]. [`decode()`] turns a HEIC file into pixels with no C
-//! and no `unsafe` anywhere in the chain.
+//! anywhere in the chain.
+//!
+//! # `unsafe`
+//!
+//! The crate root denies `unsafe_code`. The SSE2 kernels of the decoder (the
+//! luma deblocking filter on x86-64) are the only modules that allow it, for
+//! their vector loads and stores, each of which reads or writes exactly the
+//! slice it is given; every other target, and every case those kernels do not
+//! take, runs the portable code, and tests hold the two to the same output.
 //!
 //! # The rule this crate is built on
 //!
@@ -55,7 +64,8 @@
 //!   the knob and for what happens inside a caller's own pool.
 
 #![cfg_attr(not(test), no_std)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+#![warn(clippy::undocumented_unsafe_blocks)]
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

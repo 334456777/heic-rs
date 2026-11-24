@@ -312,3 +312,57 @@ fn lines_filtered_together_match_each_filtered_alone() {
         }
     }
 }
+
+/// The SSE2 filter of a segment against the portable one: random samples around an edge of either direction (some
+/// smooth, some with a step across the edge, so that every decision comes up), every `beta` and `tC` of the tables
+/// at 8, 9 and 10 bits, and either side locked, leave the plane the same.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn sse2_segments_match_the_portable_ones() {
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move |n: u32| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % u64::from(n)) as i32
+    };
+    const SIDE: usize = 12;
+    let mut filtered = [0usize; 2];
+    for case in 0..200_000 {
+        let bits = 8 + next(3) as u8;
+        let max = (1i32 << bits) - 1;
+        let spread = [0, 1, 2, 8, 40, max][next(6) as usize];
+        let step = [0, 4, 30, max][next(4) as usize] * if next(2) == 0 { 1 } else { -1 };
+        let base = next(max as u32 + 1);
+        let ver = next(2) == 0;
+        // The edge runs down column 4 (or along row 4); the segment starts at line 2.
+        let mut plane = vec![0u16; SIDE * SIDE];
+        for y in 0..SIDE {
+            for x in 0..SIDE {
+                let q_side = if ver { x >= 4 } else { y >= 4 };
+                let v = base + if q_side { step } else { 0 } + next(2 * spread as u32 + 1) - spread;
+                plane[y * SIDE + x] = v.clamp(0, max) as u16;
+            }
+        }
+        let seg = Seg::new(SIDE, ver, 4, 2, 4);
+        let edge = Edge {
+            ver,
+            beta: BETA_TABLE[next(52) as usize] << (bits - 8),
+            tc: TC_TABLE[next(54) as usize] << (bits - 8),
+            locked: (next(5) == 0, next(5) == 0),
+            max,
+        };
+        let mut want = plane.clone();
+        luma_lines(&mut want, &seg, &edge);
+        let mut got = plane.clone();
+        sse2::luma_lines(&mut got, &seg, &edge);
+        assert_eq!(
+            got, want,
+            "case {case}: {bits} bits, ver {ver}, beta {}, tc {}",
+            edge.beta, edge.tc
+        );
+        filtered[usize::from(want != plane)] += 1;
+    }
+    // Both outcomes came up often enough to mean something.
+    assert!(filtered.iter().all(|&n| n > 20_000), "{filtered:?}");
+}
