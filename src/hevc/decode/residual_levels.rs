@@ -101,6 +101,8 @@ pub fn decode_levels(
         let xc = xs * 4 + pos_scan[m][0] as usize;
         let yc = ys * 4 + pos_scan[m][1] as usize;
         d.coeffs[yc * n + xc] = v.clamp(-32768, 32767) as i32;
+        let (rows, cols) = d.coeff_bounds;
+        d.coeff_bounds = (rows.max(yc + 1), cols.max(xc + 1));
     }
     Ok(())
 }

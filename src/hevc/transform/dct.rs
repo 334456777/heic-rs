@@ -83,20 +83,28 @@ fn mul_1d<const N: usize, const SKIP: bool>(
 
 /// The two-dimensional inverse transform for one `N`x`N` block.
 ///
-/// `block` is row-major with `d[x][y]` at `block[y * N + x]`; it is overwritten
-/// with the residual `r[x][y]` at the same position.
+/// `src` is row-major with `d[x][y]` at `src[y * N + x]`, every entry of it
+/// outside the top-left `rows` x `cols` rectangle zero; `dst` receives the
+/// residual `r[x][y]` at the same position.
 ///
-/// With `BOUNDED` set, both stages sum only over the rectangle that holds the
-/// non-zero coefficients. A 4x4 block is too small for the scan to pay for
-/// itself, so it runs the full, branch-free matrix product instead; the two
-/// give identical results because the skipped terms are all zero.
+/// With `BOUNDED` set, both stages sum only over that rectangle. A 4x4 block
+/// is too small for the bound to pay for itself, so it runs the full,
+/// branch-free matrix product instead; the two give identical results
+/// because the skipped terms are all zero.
 fn two_stage<const N: usize, const BOUNDED: bool>(
-    block: &mut [i32],
+    src: &[i32],
+    dst: &mut [i32],
     m: &[[i32; N]; N],
     bd_shift: u32,
+    (rows, cols): (usize, usize),
 ) {
-    let b = &mut block[..N * N];
-    let (rows, cols) = if BOUNDED { extent(b, N) } else { (N, N) };
+    let b = &src[..N * N];
+    let out = &mut dst[..N * N];
+    let (rows, cols) = if BOUNDED {
+        (rows.min(N), cols.min(N))
+    } else {
+        (N, N)
+    };
     let rnd = 1i32 << (bd_shift - 1);
     if BOUNDED && rows == 1 {
         // Only the first coefficient row is non-zero, so the column stage
@@ -111,8 +119,8 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
         for v in row.iter_mut() {
             *v = (*v + rnd) >> bd_shift;
         }
-        for out in b.chunks_exact_mut(N) {
-            out.copy_from_slice(&row);
+        for o in out.chunks_exact_mut(N) {
+            o.copy_from_slice(&row);
         }
         return;
     }
@@ -134,12 +142,12 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
         if BOUNDED && cols == 1 {
             // One column of g means every sample of row y is m[0][i] * g[y][0]
             // with m[0][i] flat across the DCT's first basis row.
-            b[y * N..y * N + N].fill((m[0][0] * g[y][0] + rnd) >> bd_shift);
+            out[y * N..y * N + N].fill((m[0][0] * g[y][0] + rnd) >> bd_shift);
             continue;
         }
         let r = mul_1d::<N, BOUNDED>(m, &g[y], cols);
         for i in 0..N {
-            b[y * N + i] = (r[i] + rnd) >> bd_shift;
+            out[y * N + i] = (r[i] + rnd) >> bd_shift;
         }
     }
 }
@@ -155,17 +163,44 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
 /// 1 and `n` is not 4, when `bit_depth` is outside 8..=16, or when `block` is
 /// shorter than `n * n`.
 pub fn inverse_transform(block: &mut [i32], n: usize, tr_type: u8, bit_depth: u8) {
-    let bd_shift = match bd_shift_of(bit_depth) {
-        Some(s) => s,
-        None => return,
+    if n > 32 || block.len() < n * n {
+        return;
+    }
+    let mut src = [0i32; 1024];
+    src[..n * n].copy_from_slice(&block[..n * n]);
+    let bounds = extent(&src, n);
+    inverse_transform_into(&src, block, n, tr_type, bit_depth, bounds);
+}
+
+/// [`inverse_transform`] of the coefficients in `src` into `dst`, which the
+/// decoder uses so that its coefficient buffer keeps its zeros.
+///
+/// `bounds` is `(rows, cols)`, a top-left rectangle of `src` outside which
+/// every coefficient is zero. Where [`inverse_transform`] would leave the
+/// block untouched, the first `n * n` entries of `src` are copied to `dst`
+/// as they are; nothing is written when either is shorter than that.
+pub fn inverse_transform_into(
+    src: &[i32],
+    dst: &mut [i32],
+    n: usize,
+    tr_type: u8,
+    bit_depth: u8,
+    bounds: (usize, usize),
+) {
+    if n > 32 || src.len() < n * n || dst.len() < n * n {
+        return;
+    }
+    let Some(bd_shift) = bd_shift_of(bit_depth) else {
+        dst[..n * n].copy_from_slice(&src[..n * n]);
+        return;
     };
     match (tr_type, n) {
-        (1, 4) if block.len() >= 16 => two_stage::<4, false>(block, &MDST, bd_shift),
-        (0, 4) if block.len() >= 16 => two_stage::<4, false>(block, &M4, bd_shift),
-        (0, 8) if block.len() >= 64 => two_stage::<8, true>(block, &M8, bd_shift),
-        (0, 16) if block.len() >= 256 => two_stage::<16, true>(block, &M16, bd_shift),
-        (0, 32) if block.len() >= 1024 => two_stage::<32, true>(block, &M32, bd_shift),
-        _ => {}
+        (1, 4) => two_stage::<4, false>(src, dst, &MDST, bd_shift, bounds),
+        (0, 4) => two_stage::<4, false>(src, dst, &M4, bd_shift, bounds),
+        (0, 8) => two_stage::<8, true>(src, dst, &M8, bd_shift, bounds),
+        (0, 16) => two_stage::<16, true>(src, dst, &M16, bd_shift, bounds),
+        (0, 32) => two_stage::<32, true>(src, dst, &M32, bd_shift, bounds),
+        _ => dst[..n * n].copy_from_slice(&src[..n * n]),
     }
 }
 

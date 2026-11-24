@@ -15,7 +15,8 @@ pub fn residual_coding(
     pred_mode: u8,
 ) -> Result<bool> {
     let n = 1usize << log2_size;
-    d.coeffs[..n * n].fill(0);
+    debug_assert!(d.coeffs.iter().all(|&c| c == 0), "coefficients left over");
+    d.coeff_bounds = (0, 0);
     let mut ts = false;
     if d.pps.transform_skip && !d.tq_bypass && log2_size <= d.pps.log2_max_transform_skip {
         let ctx = if c_idx == 0 {

@@ -65,8 +65,16 @@ pub struct Dec<'a> {
     pub cbf_cb: [[bool; 2]; 6],
     /// `cbf_cr[trafoDepth][tIdx]`.
     pub cbf_cr: [[bool; 2]; 6],
-    /// Coefficient scratch buffer for one transform block.
+    /// The coefficients of one transform block, at `y * n + x`.
+    ///
+    /// All zero between transform blocks: residual coding writes only the
+    /// non-zero ones, and reconstruction clears what it wrote.
     pub coeffs: [i32; 1024],
+    /// `(rows, cols)`: the top-left rectangle of `coeffs` that holds every
+    /// non-zero coefficient of the block residual coding last decoded.
+    pub coeff_bounds: (usize, usize),
+    /// The residual of one transform block, at `y * n + x`.
+    pub resid: [i32; 1024],
     /// Prediction scratch buffer for one transform block.
     pub pred: [u16; 1024],
     /// `coded_sub_block_flag` scratch for one transform block.

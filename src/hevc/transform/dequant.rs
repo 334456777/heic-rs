@@ -22,6 +22,24 @@ pub const COEFF_MAX: i64 = 32767;
 /// `levels` is left untouched when it is shorter than `n * n`, when `n` is
 /// zero, or when `factors` is present but shorter than `n * n`.
 pub fn scale(levels: &mut [i32], n: usize, qp: i32, bit_depth: u8, factors: Option<&[u8]>) {
+    if n == 0 || levels.len() < n * n {
+        return;
+    }
+    let bounds = extent(levels, n);
+    scale_within(levels, n, qp, bit_depth, factors, bounds);
+}
+
+/// [`scale`] of the levels in the top-left `rows` x `cols` rectangle of the
+/// block, `bounds`, outside which every level is zero: what residual coding
+/// knows already, so the block need not be searched for it.
+pub fn scale_within(
+    levels: &mut [i32],
+    n: usize,
+    qp: i32,
+    bit_depth: u8,
+    factors: Option<&[u8]>,
+    (rows, cols): (usize, usize),
+) {
     let log2n = n.trailing_zeros() as i32;
     let bd_shift = bit_depth as i32 + log2n - 5;
     if !(1..=40).contains(&bd_shift) {
@@ -31,7 +49,7 @@ pub fn scale(levels: &mut [i32], n: usize, qp: i32, bit_depth: u8, factors: Opti
     if n == 0 || levels.len() < count {
         return;
     }
-    let (rows, cols) = extent(levels, n);
+    let (rows, cols) = (rows.min(n), cols.min(n));
     let qp = qp.max(0);
     let ls = LEVEL_SCALE[(qp % 6) as usize];
     let shift = (qp / 6) as u32;

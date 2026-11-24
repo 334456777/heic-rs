@@ -69,6 +69,8 @@ pub fn decode_slice<'a>(
         cbf_cb: [[false; 2]; 6],
         cbf_cr: [[false; 2]; 6],
         coeffs: [0; 1024],
+        coeff_bounds: (0, 0),
+        resid: [0; 1024],
         pred: [0; 1024],
         csbf: [0; 64],
         first_qg: true,

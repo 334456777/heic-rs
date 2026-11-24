@@ -4,7 +4,7 @@ use super::refs::gather_refs;
 use super::state::Dec;
 use crate::hevc::error::Result;
 use crate::hevc::intra::{filter_refs, predict};
-use crate::hevc::transform::{inverse_transform, scale, transform_skip};
+use crate::hevc::transform::{inverse_transform_into, scale_within, transform_skip};
 
 /// Predicts one transform block and adds its residual into the picture.
 ///
@@ -39,23 +39,7 @@ pub fn reconstruct(
     );
     predict(&filtered, mode, c_idx, bd, &mut d.pred, n);
     if has_resid {
-        if d.tq_bypass {
-            // Residual samples are the coefficient levels themselves.
-        } else {
-            let qp = if c_idx == 0 {
-                d.qp_luma()
-            } else {
-                d.qp_chroma(c_idx)
-            };
-            let fac = d.factors(log2, c_idx, ts);
-            scale(&mut d.coeffs, n, qp, bd, fac);
-            if ts {
-                transform_skip(&mut d.coeffs, n, bd, d.sps.transform_skip_rotation);
-            } else {
-                let tr_type = u8::from(c_idx == 0 && n == 4);
-                inverse_transform(&mut d.coeffs, n, tr_type, bd);
-            }
-        }
+        residual(d, n, log2, c_idx, bd, ts);
     }
     let max = (1i32 << bd) - 1;
     let plane = match c_idx {
@@ -75,7 +59,7 @@ pub fn reconstruct(
         let dst = &mut plane.data[o..o + w];
         let pred = &d.pred[j * n..j * n + w];
         if has_resid {
-            let res = &d.coeffs[j * n..j * n + w];
+            let res = &d.resid[j * n..j * n + w];
             for ((o, &p), &r) in dst.iter_mut().zip(pred.iter()).zip(res.iter()) {
                 *o = (p as i32 + r).clamp(0, max) as u16;
             }
@@ -84,4 +68,37 @@ pub fn reconstruct(
         }
     }
     Ok(())
+}
+
+/// Works out the residual of the block whose coefficients residual coding left
+/// in `d.coeffs` into `d.resid`, and clears the coefficients again.
+fn residual(d: &mut Dec<'_>, n: usize, log2: usize, c_idx: usize, bd: u8, ts: bool) {
+    let count = n * n;
+    if d.tq_bypass {
+        // Residual samples are the coefficient levels themselves.
+        d.resid[..count].copy_from_slice(&d.coeffs[..count]);
+        d.coeffs[..count].fill(0);
+        return;
+    }
+    let qp = if c_idx == 0 {
+        d.qp_luma()
+    } else {
+        d.qp_chroma(c_idx)
+    };
+    let bounds = d.coeff_bounds;
+    let fac = d.factors(log2, c_idx, ts);
+    scale_within(&mut d.coeffs, n, qp, bd, fac, bounds);
+    if ts {
+        // The rotation can move coefficients out of the bounds.
+        transform_skip(&mut d.coeffs, n, bd, d.sps.transform_skip_rotation);
+        d.resid[..count].copy_from_slice(&d.coeffs[..count]);
+        d.coeffs[..count].fill(0);
+        return;
+    }
+    let tr_type = u8::from(c_idx == 0 && n == 4);
+    inverse_transform_into(&d.coeffs, &mut d.resid, n, tr_type, bd, bounds);
+    let (rows, cols) = (bounds.0.min(n), bounds.1.min(n));
+    for row in d.coeffs[..count].chunks_exact_mut(n).take(rows) {
+        row[..cols].fill(0);
+    }
 }
