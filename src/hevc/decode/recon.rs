@@ -3,7 +3,7 @@
 use super::refs::gather_refs;
 use super::state::Dec;
 use crate::hevc::error::Result;
-use crate::hevc::intra::{filter_refs, predict};
+use crate::hevc::intra::{filter_refs, predict, smooths};
 use crate::hevc::transform::{inverse_transform_into, scale_within, transform_skip};
 
 /// Predicts one transform block and adds its residual into the picture.
@@ -28,16 +28,20 @@ pub fn reconstruct(
         d.sps.bit_depth_c
     };
     let raw = gather_refs(d, x, y, n, c_idx);
-    let filtered = filter_refs(
-        &raw,
-        mode,
-        c_idx,
-        bd,
-        d.cat,
-        d.sps.strong_intra_smoothing,
-        d.sps.intra_smoothing_disabled,
-    );
-    predict(&filtered, mode, c_idx, bd, &mut d.pred, n);
+    let refs = if smooths(n, mode, c_idx, d.cat, d.sps.intra_smoothing_disabled) {
+        &filter_refs(
+            &raw,
+            mode,
+            c_idx,
+            bd,
+            d.cat,
+            d.sps.strong_intra_smoothing,
+            d.sps.intra_smoothing_disabled,
+        )
+    } else {
+        &raw
+    };
+    predict(refs, mode, c_idx, bd, &mut d.pred, n);
     if has_resid {
         residual(d, n, log2, c_idx, bd, ts);
     }
@@ -54,20 +58,48 @@ pub fn reconstruct(
         // can point past the end of the plane (reported by s17sh70x2jfl031ag against 0.1.3).
         return Ok(());
     }
-    for j in 0..h {
-        let o = (y + j) * plane.stride + x;
-        let dst = &mut plane.data[o..o + w];
-        let pred = &d.pred[j * n..j * n + w];
-        if has_resid {
-            let res = &d.resid[j * n..j * n + w];
-            for ((o, &p), &r) in dst.iter_mut().zip(pred.iter()).zip(res.iter()) {
-                *o = (p as i32 + r).clamp(0, max) as u16;
-            }
-        } else {
-            dst.copy_from_slice(pred);
-        }
+    let resid = if has_resid { Some(&d.resid[..]) } else { None };
+    let (data, stride) = (&mut plane.data[..], plane.stride);
+    let block = (x, y, w, h, n);
+    match n {
+        4 if w == 4 => write_rows::<4>(data, stride, block, &d.pred, resid, max),
+        8 if w == 8 => write_rows::<8>(data, stride, block, &d.pred, resid, max),
+        16 if w == 16 => write_rows::<16>(data, stride, block, &d.pred, resid, max),
+        32 if w == 32 => write_rows::<32>(data, stride, block, &d.pred, resid, max),
+        _ => write_rows::<0>(data, stride, block, &d.pred, resid, max),
     }
     Ok(())
+}
+
+/// Writes the `w` x `h` samples at `(x, y)` of an `n`x`n` block into a plane
+/// whose rows are `stride` apart: the prediction plus the residual, clipped to
+/// `0..=max`, or the prediction alone.
+///
+/// `W` is `w` when it is known up front, which turns each row into one
+/// fixed-size copy or sum the compiler lays out inline; 0 for any width.
+fn write_rows<const W: usize>(
+    data: &mut [u16],
+    stride: usize,
+    (x, y, w, h, n): (usize, usize, usize, usize, usize),
+    pred: &[u16],
+    resid: Option<&[i32]>,
+    max: i32,
+) {
+    let w = if W > 0 { W } else { w };
+    for j in 0..h {
+        let o = (y + j) * stride + x;
+        let dst = &mut data[o..o + w];
+        let pred = &pred[j * n..j * n + w];
+        match resid {
+            Some(resid) => {
+                let res = &resid[j * n..j * n + w];
+                for ((o, &p), &r) in dst.iter_mut().zip(pred).zip(res) {
+                    *o = (p as i32 + r).clamp(0, max) as u16;
+                }
+            }
+            None => dst.copy_from_slice(pred),
+        }
+    }
 }
 
 /// Works out the residual of the block whose coefficients residual coding left

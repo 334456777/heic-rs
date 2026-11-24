@@ -4,7 +4,7 @@ mod pred;
 mod smooth;
 
 pub use pred::predict;
-pub use smooth::filter_refs;
+pub use smooth::{filter_refs, smooths};
 
 /// Neighbouring reference samples for one transform block.
 ///

@@ -2,6 +2,28 @@
 
 use super::Refs;
 
+/// Whether clause 8.4.4.2.3 filters the reference samples of an `n`x`n` block
+/// at all; where it does not, [`filter_refs`] returns them unchanged.
+pub fn smooths(
+    n: usize,
+    mode: u8,
+    c_idx: usize,
+    chroma_array_type: u8,
+    disable_smoothing: bool,
+) -> bool {
+    if disable_smoothing || (c_idx != 0 && chroma_array_type != 3) {
+        return false;
+    }
+    let m = mode as i32;
+    let thresh = match n {
+        8 => 7,
+        16 => 1,
+        _ => 0,
+    };
+    let dist = core::cmp::min((m - 26).abs(), (m - 10).abs());
+    !(mode == 1 || mode > 34 || n == 4 || dist <= thresh)
+}
+
 /// Filters the neighbouring reference samples (clause 8.4.4.2.3).
 ///
 /// `mode` is predModeIntra (0 planar, 1 DC, 2..=34 angular), `c_idx` 0 for luma,
@@ -19,17 +41,7 @@ pub fn filter_refs(
 ) -> Refs {
     let n = r.n;
     let nn = 2 * n as isize;
-    if disable_smoothing || (c_idx != 0 && chroma_array_type != 3) {
-        return r.clone();
-    }
-    let m = mode as i32;
-    let thresh = match n {
-        8 => 7,
-        16 => 1,
-        _ => 0,
-    };
-    let dist = core::cmp::min((m - 26).abs(), (m - 10).abs());
-    if mode == 1 || mode > 34 || n == 4 || dist <= thresh {
+    if !smooths(n, mode, c_idx, chroma_array_type, disable_smoothing) {
         return r.clone();
     }
     let c = r.top(-1) as i32;
