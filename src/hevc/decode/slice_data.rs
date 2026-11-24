@@ -88,7 +88,7 @@ pub fn decode_slice<'a>(
         let rs = geo.ts_to_rs[ts] as usize;
         if ts == geo.rs_to_ts[d.sh.segment_address as usize] as usize
             && pps.wpp_enabled
-            && rs % geo.w_ctbs == 0
+            && rs.is_multiple_of(geo.w_ctbs)
         {
             restore_wpp(&mut d, &saved, rs, geo);
         }
@@ -107,7 +107,7 @@ pub fn decode_slice<'a>(
         }
         let next = geo.ts_to_rs[ts] as usize;
         let new_tile = geo.tile_id[next] != geo.tile_id[rs];
-        let new_row = pps.wpp_enabled && next % geo.w_ctbs == 0;
+        let new_row = pps.wpp_enabled && next.is_multiple_of(geo.w_ctbs);
         if new_tile || new_row {
             d.cab.terminate()?; // end_of_subset_one_bit, always 1
             sub += 1;

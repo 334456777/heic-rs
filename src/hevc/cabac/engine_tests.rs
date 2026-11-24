@@ -101,7 +101,7 @@ fn decisions_match_the_branching_reference_on_any_stream() {
         streams += 1;
         for k in 0..1500 {
             let r = xorshift(&mut rng);
-            if r % 8 == 0 {
+            if r.is_multiple_of(8) {
                 assert_eq!(fast.bypass(), slow.bypass(), "bypass bin {k}");
             } else {
                 let ctx = (r >> 8) as usize % NUM_CTX;
