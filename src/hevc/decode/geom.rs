@@ -84,19 +84,26 @@ impl Geometry {
         let min_tb_w = sps.width.div_ceil(1 << min_tb_log2);
         let min_tb_h = sps.height.div_ceil(1 << min_tb_log2);
         let shift = sps.log2_ctb - min_tb_log2;
+        // The z-scan offset of a minimum transform block inside its coding
+        // tree block is the sum of one term per bit of its position there:
+        // `m * m` for bit `m` of x, `2 * m * m` for bit `m` of y. Each sum is
+        // worked out once for every position along each axis.
+        let mask = (1usize << shift) - 1;
+        let spread = |v: usize, weight: u32| -> u32 {
+            (0..shift)
+                .filter(|&i| v & (1 << i) != 0)
+                .map(|i| weight << (2 * i))
+                .sum()
+        };
+        let zx: Vec<u32> = (0..=mask).map(|x| spread(x, 1)).collect();
+        let zy: Vec<u32> = (0..=mask).map(|y| spread(y, 2)).collect();
         let mut zs = vec![0u32; min_tb_w * min_tb_h];
-        for y in 0..min_tb_h {
-            for x in 0..min_tb_w {
-                let ctb_rs = w_ctbs * ((y << min_tb_log2) >> sps.log2_ctb)
-                    + ((x << min_tb_log2) >> sps.log2_ctb);
-                let mut v = rs_to_ts[ctb_rs] << (shift * 2);
-                for i in 0..shift {
-                    let m = 1usize << i;
-                    let mm = (m * m) as u32;
-                    v += if x & m != 0 { mm } else { 0 };
-                    v += if y & m != 0 { 2 * mm } else { 0 };
-                }
-                zs[y * min_tb_w + x] = v;
+        for (y, row) in zs.chunks_exact_mut(min_tb_w.max(1)).enumerate() {
+            let ctb_row = w_ctbs * ((y << min_tb_log2) >> sps.log2_ctb);
+            let oy = zy[y & mask];
+            for (x, v) in row.iter_mut().enumerate() {
+                let ctb_rs = ctb_row + ((x << min_tb_log2) >> sps.log2_ctb);
+                *v = (rs_to_ts[ctb_rs] << (shift * 2)) + oy + zx[x & mask];
             }
         }
         Ok(Geometry {

@@ -135,6 +135,48 @@ fn z_scan_addresses_increase_along_the_quad_tree_order() {
     }
 }
 
+/// Every `MinTbAddrZs` is what clause 6.5.2 computes for it bit by bit, for
+/// pictures that do not fill their last coding tree blocks, with and without
+/// tiles, at every coding tree block size.
+#[test]
+fn z_scan_addresses_match_the_clause_bit_by_bit() {
+    for (width, height, log2_ctb, cols, rows) in [
+        (200, 120, 4, 1, 1),
+        (200, 120, 5, 3, 2),
+        (264, 72, 6, 2, 1),
+        (64, 64, 6, 1, 1),
+        (8, 8, 4, 1, 1),
+    ] {
+        let s = sps(width, height, log2_ctb);
+        let p = Pps {
+            num_tile_cols: cols,
+            num_tile_rows: rows,
+            uniform_spacing: true,
+            ..Default::default()
+        };
+        let g = Geometry::new(&s, &p).expect("geometry");
+        let shift = log2_ctb - s.log2_min_tb;
+        for y in 0..g.min_tb_h {
+            for x in 0..g.min_tb_w {
+                let ctb_rs = g.w_ctbs * ((y << s.log2_min_tb) >> log2_ctb)
+                    + ((x << s.log2_min_tb) >> log2_ctb);
+                let mut want = g.rs_to_ts[ctb_rs] << (shift * 2);
+                for i in 0..shift {
+                    let m = 1usize << i;
+                    let mm = (m * m) as u32;
+                    want += if x & m != 0 { mm } else { 0 };
+                    want += if y & m != 0 { 2 * mm } else { 0 };
+                }
+                assert_eq!(
+                    g.zs[y * g.min_tb_w + x],
+                    want,
+                    "{width}x{height}, ({x}, {y})"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn degenerate_tile_configurations_are_rejected() {
     let s = sps(64, 64, 5); // 2x2 coding tree blocks
