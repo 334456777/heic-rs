@@ -64,8 +64,15 @@ fn segment(pic: &mut Picture, info: &FilterInfo, ver: bool, e: usize, s: usize) 
     }
 }
 
-/// Filters every marked chroma edge of one direction over the whole picture.
-pub(super) fn dir(pic: &mut Picture, info: &FilterInfo, ver: bool) {
+/// How many strips of eight chroma rows [`strip`] divides the picture into.
+pub(super) fn strips(pic: &Picture) -> usize {
+    pic.cb.height.div_ceil(8)
+}
+
+/// Filters the marked chroma edges of one direction in strip `strip` of eight
+/// chroma rows: the vertical edges crossing it, or the horizontal edge on top
+/// of it.
+pub(super) fn strip(pic: &mut Picture, info: &FilterInfo, ver: bool, strip: usize) {
     if info.chroma_array_type == 0 || info.sub_w == 0 || info.sub_h == 0 {
         return;
     }
@@ -73,10 +80,25 @@ pub(super) fn dir(pic: &mut Picture, info: &FilterInfo, ver: bool) {
     let (sw, sh) = (info.sub_w, info.sub_h);
     let (cw, ch) = (pic.cb.width, pic.cb.height);
     let (elen, slen) = if ver { (cw, ch) } else { (ch, cw) };
-    let mut e = 8;
-    while e + 1 < elen {
-        let mut s = 0;
-        while s + 3 < slen {
+    // Vertical edges: every one, over the strip's rows. Horizontal: the one
+    // on top of the strip, over every column.
+    let (edges, segments) = if ver {
+        (
+            (8..elen).step_by(8),
+            (8 * strip..slen.min(8 * strip + 8)).step_by(4),
+        )
+    } else {
+        let e = 8 * strip;
+        ((e.max(8)..elen.min(e + 1)).step_by(8), (0..slen).step_by(4))
+    };
+    for e in edges {
+        if e + 1 >= elen {
+            break;
+        }
+        for s in segments.clone() {
+            if s + 3 >= slen {
+                break;
+            }
             let (lx, ly) = if ver {
                 (e * sw, s * sh)
             } else {
@@ -86,8 +108,6 @@ pub(super) fn dir(pic: &mut Picture, info: &FilterInfo, ver: bool) {
             if pic.edges.get(cell).map_or(0u8, |v| *v) & kind != 0 {
                 segment(pic, info, ver, e, s);
             }
-            s += 4;
         }
-        e += 8;
     }
 }

@@ -263,29 +263,29 @@ fn luma_lines(data: &mut [u16], seg: &Seg, edge: &Edge) {
     }
 }
 
-/// Filters every marked luma edge of one direction over the whole picture.
-fn luma_dir(pic: &mut Picture, info: &FilterInfo, ver: bool) {
+/// Filters the marked luma edges of one direction in the eight rows of 8x8
+/// cells `by`: the vertical edges crossing them, or the horizontal edge on
+/// top of them.
+fn luma_strip(pic: &mut Picture, info: &FilterInfo, ver: bool, by: usize) {
     let kind = if ver { edge::VER } else { edge::HOR };
     let (w, h) = (pic.y.width, pic.y.height);
     let (elen, slen) = if ver { (w, h) } else { (h, w) };
-    for by in 0..pic.min8_h {
-        for bx in 0..pic.min8_w {
-            if pic.edges[by * pic.min8_w + bx] & kind == 0 {
-                continue;
-            }
-            let (e, s0) = if ver {
-                (bx * 8, by * 8)
-            } else {
-                (by * 8, bx * 8)
-            };
-            if e == 0 || e + 3 >= elen {
-                continue;
-            }
-            for seg in 0..2 {
-                let s = s0 + seg * 4;
-                if s + 3 < slen {
-                    luma_segment(pic, info, ver, e, s);
-                }
+    for bx in 0..pic.min8_w {
+        if pic.edges[by * pic.min8_w + bx] & kind == 0 {
+            continue;
+        }
+        let (e, s0) = if ver {
+            (bx * 8, by * 8)
+        } else {
+            (by * 8, bx * 8)
+        };
+        if e == 0 || e + 3 >= elen {
+            continue;
+        }
+        for seg in 0..2 {
+            let s = s0 + seg * 4;
+            if s + 3 < slen {
+                luma_segment(pic, info, ver, e, s);
             }
         }
     }
@@ -293,13 +293,25 @@ fn luma_dir(pic: &mut Picture, info: &FilterInfo, ver: bool) {
 
 /// Applies the in-loop deblocking filter of clause 8.7.2 to `pic` in place.
 ///
-/// All vertical edges of the picture are filtered before any horizontal edge,
-/// so the horizontal pass reads samples the vertical pass already modified.
+/// The clause filters every vertical edge of the picture before any
+/// horizontal edge, so the horizontal pass reads samples the vertical pass
+/// already modified. Each plane is filtered here one strip of eight rows at a
+/// time instead, while the strip is still in the cache: the vertical edges
+/// crossing the strip, then the horizontal edge on top of it. That gives the
+/// same samples. The horizontal edge reads and writes at most four rows on
+/// either side of it, all of them in this strip or the one before, whose
+/// vertical edges are filtered by then; and the vertical edges of a strip
+/// read and write that strip only, which no horizontal edge before it
+/// reaches.
 pub fn deblock(pic: &mut Picture, info: &FilterInfo) {
-    luma_dir(pic, info, true);
-    chroma::dir(pic, info, true);
-    luma_dir(pic, info, false);
-    chroma::dir(pic, info, false);
+    for by in 0..pic.min8_h {
+        luma_strip(pic, info, true, by);
+        luma_strip(pic, info, false, by);
+    }
+    for strip in 0..chroma::strips(pic) {
+        chroma::strip(pic, info, true, strip);
+        chroma::strip(pic, info, false, strip);
+    }
 }
 
 #[cfg(test)]

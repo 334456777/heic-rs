@@ -366,3 +366,81 @@ fn sse2_segments_match_the_portable_ones() {
     // Both outcomes came up often enough to mean something.
     assert!(filtered.iter().all(|&n| n > 20_000), "{filtered:?}");
 }
+
+/// A random 4:2:0 picture of 3x3 CTBs of 16, with random marked edges, quantisers and samples (smooth enough in
+/// places for both filters to act), and its filter information.
+fn random_picture(seed: u64) -> (Picture, FilterInfo) {
+    let mut state = seed | 1;
+    let mut next = move |n: u32| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % u64::from(n)) as i32
+    };
+    let (w, h) = (48, 40);
+    let info = FilterInfo {
+        chroma_array_type: 1,
+        sub_w: 2,
+        sub_h: 2,
+        pic_w_ctbs: 3,
+        pic_h_ctbs: 3,
+        ctb: vec![
+            CtbFilter {
+                deblock_disabled: false,
+                ..CtbFilter::default()
+            };
+            9
+        ],
+        tile_id: vec![0; 9],
+        slice_addr: vec![0; 9],
+        ..mk_info(false)
+    };
+    let mut pic = Picture::new(w, h, 2, 2).expect("picture");
+    let spread = [1, 3, 12, 255][next(4) as usize];
+    for plane in [&mut pic.y, &mut pic.cb, &mut pic.cr] {
+        let base = next(256);
+        for v in plane.data.iter_mut() {
+            *v = (base + next(2 * spread as u32 + 1) - spread).clamp(0, 255) as u16;
+        }
+    }
+    for qp in pic.qp_y.iter_mut() {
+        *qp = (20 + next(32)) as i8;
+    }
+    for y in (0..h).step_by(8) {
+        for x in (0..w).step_by(8) {
+            let kind = [0, edge::VER, edge::HOR, edge::VER | edge::HOR][next(4) as usize];
+            pic.mark_edge(x, y, 8, kind);
+        }
+    }
+    (pic, info)
+}
+
+/// Filtering strip by strip gives what the clause's order gives, every vertical edge of a plane before any
+/// horizontal one.
+#[test]
+fn strip_by_strip_matches_all_vertical_edges_first() {
+    let mut changed = 0;
+    for seed in 0..300u64 {
+        let (mut want, info) = random_picture(seed);
+        let before = want.y.data.clone();
+        for by in 0..want.min8_h {
+            luma_strip(&mut want, &info, true, by);
+        }
+        for strip in 0..chroma::strips(&want) {
+            chroma::strip(&mut want, &info, true, strip);
+        }
+        for by in 0..want.min8_h {
+            luma_strip(&mut want, &info, false, by);
+        }
+        for strip in 0..chroma::strips(&want) {
+            chroma::strip(&mut want, &info, false, strip);
+        }
+        let (mut got, _) = random_picture(seed);
+        deblock(&mut got, &info);
+        changed += usize::from(want.y.data != before);
+        assert_eq!(got.y.data, want.y.data, "seed {seed}: luma");
+        assert_eq!(got.cb.data, want.cb.data, "seed {seed}: cb");
+        assert_eq!(got.cr.data, want.cr.data, "seed {seed}: cr");
+    }
+    assert!(changed > 100, "only {changed} pictures filtered");
+}
