@@ -28,15 +28,15 @@ const MIN_BIT_DEPTH: u8 = 8;
 const MAX_BIT_DEPTH: u8 = 16;
 
 /// `Clip3(coeffMin, coeffMax, v)` of clause 5, written without `clamp` so that
-/// the transform keeps no panicking path at all.
+/// the transform keeps no panicking path at all; the result fits an `i16`.
 #[allow(clippy::manual_clamp)]
-fn clip_coeff(v: i32) -> i32 {
+fn clip_coeff(v: i32) -> i16 {
     if v < COEFF_MIN {
-        COEFF_MIN
+        i16::MIN
     } else if v > COEFF_MAX {
-        COEFF_MAX
+        i16::MAX
     } else {
-        v
+        v as i16
     }
 }
 
@@ -63,19 +63,19 @@ const fn bd_shift_of(bit_depth: u8) -> Option<u32> {
 /// The largest attainable magnitude is `32 * 32768 * 90 = 94_371_840`, well
 /// inside `i32`, because both stages take 16-bit-clipped inputs.
 fn mul_1d<const N: usize, const SKIP: bool>(
-    m: &[[i32; N]; N],
-    src: &[i32; N],
+    m: &[[i16; N]; N],
+    src: &[i16; N],
     terms: usize,
 ) -> [i32; N] {
     let mut acc = [0i32; N];
     for j in 0..core::cmp::min(terms, N) {
-        let c = src[j];
+        let c = i32::from(src[j]);
         if SKIP && c == 0 {
             continue;
         }
         let row = &m[j];
         for i in 0..N {
-            acc[i] += row[i] * c;
+            acc[i] += i32::from(row[i]) * c;
         }
     }
     acc
@@ -94,7 +94,7 @@ fn mul_1d<const N: usize, const SKIP: bool>(
 fn two_stage<const N: usize, const BOUNDED: bool>(
     src: &[i32],
     dst: &mut [i32],
-    m: &[[i32; N]; N],
+    m: &[[i16; N]; N],
     bd_shift: u32,
     (rows, cols): (usize, usize),
 ) {
@@ -111,9 +111,10 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
         // gives every row of g the same values, m[0][y] * d[x] with m[0][y]
         // equal to m[0][0] for every y of the DCT. The row stage therefore
         // produces one residual row, repeated down the block.
-        let mut g0 = [0i32; N];
+        let mut g0 = [0i16; N];
         for (g, &c) in g0.iter_mut().zip(b.iter()).take(cols) {
-            *g = clip_coeff((m[0][0] * c + (1 << (STAGE1_SHIFT - 1))) >> STAGE1_SHIFT);
+            let c = i32::from(clip_coeff(c));
+            *g = clip_coeff((i32::from(m[0][0]) * c + (1 << (STAGE1_SHIFT - 1))) >> STAGE1_SHIFT);
         }
         let mut row = mul_1d::<N, true>(m, &g0, cols);
         for v in row.iter_mut() {
@@ -127,11 +128,11 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
     // g[y][x], the clipped output of the column stage. Columns at or past
     // `cols` have an all-zero source, so they stay zero and are not computed;
     // the second stage is then told to stop summing there.
-    let mut g = [[0i32; N]; N];
-    let mut col = [0i32; N];
+    let mut g = [[0i16; N]; N];
+    let mut col = [0i16; N];
     for x in 0..cols {
         for j in 0..rows {
-            col[j] = b[j * N + x];
+            col[j] = clip_coeff(b[j * N + x]);
         }
         let e = mul_1d::<N, BOUNDED>(m, &col, rows);
         for y in 0..N {
@@ -142,7 +143,7 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
         if BOUNDED && cols == 1 {
             // One column of g means every sample of row y is m[0][i] * g[y][0]
             // with m[0][i] flat across the DCT's first basis row.
-            out[y * N..y * N + N].fill((m[0][0] * g[y][0] + rnd) >> bd_shift);
+            out[y * N..y * N + N].fill((i32::from(m[0][0]) * i32::from(g[y][0]) + rnd) >> bd_shift);
             continue;
         }
         let r = mul_1d::<N, BOUNDED>(m, &g[y], cols);
@@ -157,7 +158,9 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
 ///
 /// `block` holds the scaled transform coefficients d[x][y] at
 /// `block[y * n + x]` and receives the residual samples r[x][y].
-/// `tr_type` is 0 for DCT-II and 1 for the 4x4 DST-VII.
+/// `tr_type` is 0 for DCT-II and 1 for the 4x4 DST-VII. A coefficient outside
+/// `coeffMin..=coeffMax`, which the scaling of clause 8.6.3 never gives, is
+/// clipped to it first.
 ///
 /// `block` is left untouched when `n` is not 4, 8, 16 or 32, when `tr_type` is
 /// 1 and `n` is not 4, when `bit_depth` is outside 8..=16, or when `block` is

@@ -59,32 +59,16 @@ pub(crate) static DCT_MATRIX: [[i16; 32]; 32] = build_dct();
 #[cfg(test)]
 pub(crate) static DST_MATRIX: [[i16; 4]; 4] = DST_DATA;
 
-/// Row sub-samples [`build_dct`] down to the `N`-point matrix and widens it to
-/// `i32` so the hot loops never sign-extend.
-const fn sub<const N: usize>() -> [[i32; N]; N] {
+/// Row sub-samples [`build_dct`] down to the `N`-point matrix.
+const fn sub<const N: usize>() -> [[i16; N]; N] {
     let full = build_dct();
     let step = 32 / N;
-    let mut m = [[0i32; N]; N];
+    let mut m = [[0i16; N]; N];
     let mut k = 0;
     while k < N {
         let mut n = 0;
         while n < N {
-            m[k][n] = full[k * step][n] as i32;
-            n += 1;
-        }
-        k += 1;
-    }
-    m
-}
-
-/// Widens [`DST_DATA`] to `i32` for the hot loops.
-const fn dst_i32() -> [[i32; 4]; 4] {
-    let mut m = [[0i32; 4]; 4];
-    let mut k = 0;
-    while k < 4 {
-        let mut n = 0;
-        while n < 4 {
-            m[k][n] = DST_DATA[k][n] as i32;
+            m[k][n] = full[k * step][n];
             n += 1;
         }
         k += 1;
@@ -93,12 +77,12 @@ const fn dst_i32() -> [[i32; 4]; 4] {
 }
 
 /// 4-point DCT-II matrix.
-pub(super) const M4: [[i32; 4]; 4] = sub::<4>();
+pub(super) const M4: [[i16; 4]; 4] = sub::<4>();
 /// 8-point DCT-II matrix.
-pub(super) const M8: [[i32; 8]; 8] = sub::<8>();
+pub(super) const M8: [[i16; 8]; 8] = sub::<8>();
 /// 16-point DCT-II matrix.
-pub(super) const M16: [[i32; 16]; 16] = sub::<16>();
+pub(super) const M16: [[i16; 16]; 16] = sub::<16>();
 /// 32-point DCT-II matrix.
-pub(super) const M32: [[i32; 32]; 32] = sub::<32>();
+pub(super) const M32: [[i16; 32]; 32] = sub::<32>();
 /// 4-point DST-VII matrix.
-pub(super) const MDST: [[i32; 4]; 4] = dst_i32();
+pub(super) const MDST: [[i16; 4]; 4] = DST_DATA;
