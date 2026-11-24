@@ -14,6 +14,7 @@ mod matrix;
 pub(crate) use matrix::{DCT_MATRIX, DST_MATRIX};
 use matrix::{M4, M8, M16, M32, MDST};
 
+#[cfg(any(test, feature = "bench"))]
 use super::extent::extent;
 
 /// Lower bound `coeffMin` on an intermediate transform coefficient (16 bit).
@@ -165,6 +166,7 @@ fn two_stage<const N: usize, const BOUNDED: bool>(
 /// `block` is left untouched when `n` is not 4, 8, 16 or 32, when `tr_type` is
 /// 1 and `n` is not 4, when `bit_depth` is outside 8..=16, or when `block` is
 /// shorter than `n * n`.
+#[cfg(any(test, feature = "bench"))]
 pub fn inverse_transform(block: &mut [i32], n: usize, tr_type: u8, bit_depth: u8) {
     if n > 32 || block.len() < n * n {
         return;

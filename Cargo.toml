@@ -2,7 +2,7 @@
 name = "heic-rs"
 version = "0.1.4"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 description = "Pure-Rust HEIC/HEIF image decoder: no C, unsafe only in its SSE2 kernels, no_std-friendly, wasm-ready"
 repository = "https://github.com/tbraun96/heic-rs"

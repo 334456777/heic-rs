@@ -1,5 +1,6 @@
 //! Scaling of transform coefficients (clause 8.6.3).
 
+#[cfg(any(test, feature = "bench"))]
 use super::extent::extent;
 
 /// `levelScale[]` from clause 8.6.3.
@@ -21,6 +22,7 @@ pub const COEFF_MAX: i64 = 32767;
 ///
 /// `levels` is left untouched when it is shorter than `n * n`, when `n` is
 /// zero, or when `factors` is present but shorter than `n * n`.
+#[cfg(any(test, feature = "bench"))]
 pub fn scale(levels: &mut [i32], n: usize, qp: i32, bit_depth: u8, factors: Option<&[u8]>) {
     if n == 0 || levels.len() < n * n {
         return;
