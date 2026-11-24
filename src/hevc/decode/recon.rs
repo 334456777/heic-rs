@@ -3,7 +3,7 @@
 use super::refs::gather_refs;
 use super::state::Dec;
 use crate::hevc::error::Result;
-use crate::hevc::intra::{filter_refs, predict, smooths};
+use crate::hevc::intra::{Refs, filter_refs, predict, smooths};
 use crate::hevc::transform::{inverse_transform_into, scale_within, transform_skip};
 
 /// Predicts one transform block and adds its residual into the picture.
@@ -27,7 +27,8 @@ pub fn reconstruct(
     } else {
         d.sps.bit_depth_c
     };
-    let raw = gather_refs(d, x, y, n, c_idx);
+    let mut raw = Refs::new(n);
+    gather_refs(d, x, y, n, c_idx, &mut raw);
     let refs = if smooths(n, mode, c_idx, d.cat, d.sps.intra_smoothing_disabled) {
         &filter_refs(
             &raw,
@@ -129,8 +130,6 @@ fn residual(d: &mut Dec<'_>, n: usize, log2: usize, c_idx: usize, bd: u8, ts: bo
     }
     let tr_type = u8::from(c_idx == 0 && n == 4);
     inverse_transform_into(&d.coeffs, &mut d.resid, n, tr_type, bd, bounds);
-    let (rows, cols) = (bounds.0.min(n), bounds.1.min(n));
-    for row in d.coeffs[..count].chunks_exact_mut(n).take(rows) {
-        row[..cols].fill(0);
-    }
+    // The rows the coefficients reach, whole: one `memset` rather than one for each row.
+    d.coeffs[..bounds.0.min(n) * n].fill(0);
 }

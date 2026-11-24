@@ -41,7 +41,8 @@ pub fn residual_coding(
     let sb_scan = scan_order(sb_log2, scan_idx);
     let last_sb = scan_pos(sb_log2, scan_idx, last_x >> 2, last_y >> 2);
     let last_pos = scan_pos(2, scan_idx, last_x & 3, last_y & 3);
-    d.csbf[..sb_n * sb_n].fill(0);
+    // All of it: a fixed length is a few stores, `sb_n * sb_n` a call to `memset`.
+    d.csbf.fill(0);
     let ts_ctx = d.sps.transform_skip_context && (ts || d.tq_bypass);
     let sb_type = (if c_idx == 0 { 0 } else { 2 }) + usize::from(ts || d.tq_bypass);
     let raster = &SUB_RASTER[scan_idx];

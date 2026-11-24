@@ -3,10 +3,13 @@
 use super::state::Dec;
 use crate::hevc::intra::Refs;
 
-/// Collects the neighbouring samples of a transform block and substitutes
-/// the unavailable ones.
+/// Collects the neighbouring samples of a transform block into `r` and
+/// substitutes the unavailable ones.
 ///
 /// `x` and `y` are in the coordinates of component `c_idx`, `n` is `nTbS`.
+/// Every one of the `4 * n + 1` reference samples is written, whatever `r`
+/// held. It is filled in place rather than returned, which the compiler does
+/// by copying the 266-byte struct out of this function on every block.
 ///
 /// `Dec::available` reads its argument only through `z`, which is indexed in
 /// minimum transform blocks, and through the CTB address, which is coarser
@@ -15,7 +18,7 @@ use crate::hevc::intra::Refs;
 /// are walked one such block at a time: one clause 6.4.1 derivation per
 /// block, and the samples of an available block copied as a run rather than
 /// addressed one by one.
-pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> Refs {
+pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize, r: &mut Refs) {
     let (sw, sh) = if c_idx == 0 {
         (1usize, 1usize)
     } else {
@@ -35,7 +38,7 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
     let near = d.neighbourhood(xc, yc);
     let total = 4 * n + 1;
     let (stride, data) = (plane.stride, plane.data.as_slice());
-    let mut r = Refs::new(n);
+    r.n = n;
     let mut avail = [false; 129];
     // One minimum transform block spans this many samples of this component
     // along each axis; never zero, as `sub_w` and `sub_h` are 1 or 2 and the
@@ -64,8 +67,8 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
                 let end = (yy + step_y).min(plane.height).min(y + 2 * n);
                 for (j, yj) in (yy..end).enumerate() {
                     r.buf[2 * n - 1 - k - j] = data[yj * stride + col];
-                    avail[2 * n - 1 - k - j] = true;
                 }
+                mark(&mut avail, 2 * n - k - (end - yy), end - yy);
             } else {
                 all = false;
             }
@@ -95,13 +98,9 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
             }
             if near.available(xx * sw, (y - 1) * sh) {
                 let end = (xx + step_x).min(plane.width).min(x + 2 * n);
-                // A plain loop: the run is two or four samples, for which a
-                // library copy is all call overhead.
                 let i0 = 2 * n + 1 + k;
-                for (j, &v) in data[row + xx..row + end].iter().enumerate() {
-                    r.buf[i0 + j] = v;
-                    avail[i0 + j] = true;
-                }
+                copy_run(&mut r.buf[i0..], &data[row + xx..row + end]);
+                mark(&mut avail, i0, end - xx);
             } else {
                 all = false;
             }
@@ -112,9 +111,35 @@ pub fn gather_refs(d: &Dec<'_>, x: usize, y: usize, n: usize, c_idx: usize) -> R
     }
 
     if !all {
-        substitute(&mut r, &avail, total, bit_depth);
+        substitute(r, &avail, total, bit_depth);
     }
-    r
+}
+
+// A run is the samples of one minimum transform block: two, four or eight as a rule. A loop over
+// them, or a copy or fill of a length known only at run time, becomes a call to `memcpy` or
+// `memset`, which for so few samples is all call overhead; a length the compiler knows is a move or
+// two of its own.
+
+/// Copies the run `src` to the start of `dst`.
+#[inline(always)]
+fn copy_run(dst: &mut [u16], src: &[u16]) {
+    match src.len() {
+        2 => dst[..2].copy_from_slice(&src[..2]),
+        4 => dst[..4].copy_from_slice(&src[..4]),
+        8 => dst[..8].copy_from_slice(&src[..8]),
+        len => dst[..len].copy_from_slice(src),
+    }
+}
+
+/// Marks the `len` reference samples from index `at` available.
+#[inline(always)]
+fn mark(avail: &mut [bool; 129], at: usize, len: usize) {
+    match len {
+        2 => avail[at..at + 2].copy_from_slice(&[true; 2]),
+        4 => avail[at..at + 4].copy_from_slice(&[true; 4]),
+        8 => avail[at..at + 8].copy_from_slice(&[true; 8]),
+        _ => avail[at..at + len].fill(true),
+    }
 }
 
 /// Reference sample substitution (clause 8.4.4.2.2).
