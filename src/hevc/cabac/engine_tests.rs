@@ -84,6 +84,36 @@ fn engine_round_trips_random_bin_sequences() {
     }
 }
 
+/// The branch-free decision against the clause's branching one, on random
+/// bytes (any byte string is some bin sequence) and random contexts, with
+/// bypass bins in between: every bin, context variable and engine state agree.
+#[test]
+fn decisions_match_the_branching_reference_on_any_stream() {
+    let mut rng = 0x9e37_79b9u32;
+    let mut streams = 0;
+    while streams < 400 {
+        let data: Vec<u8> = (0..256).map(|_| xorshift(&mut rng) as u8).collect();
+        let qp = (xorshift(&mut rng) % 52) as i32;
+        let (Ok(mut fast), Ok(mut slow)) = (Cabac::new(&data, 0, qp), Cabac::new(&data, 0, qp))
+        else {
+            continue; // the first nine bits are 510 or 511
+        };
+        streams += 1;
+        for k in 0..1500 {
+            let r = xorshift(&mut rng);
+            if r % 8 == 0 {
+                assert_eq!(fast.bypass(), slow.bypass(), "bypass bin {k}");
+            } else {
+                let ctx = (r >> 8) as usize % NUM_CTX;
+                let bin = fast.decision(ctx);
+                assert_eq!(bin, slow.decision_reference(ctx), "bin {k}, qp {qp}");
+            }
+            assert_eq!(fast.snapshot(), slow.snapshot(), "engine after bin {k}");
+            assert_eq!(fast.ctx, slow.ctx, "contexts after bin {k}");
+        }
+    }
+}
+
 #[test]
 fn engine_round_trips_terminating_zero_bins() {
     let mut enc = Enc::new(30);

@@ -68,15 +68,38 @@ pub static RANGE_TAB_LPS: [[u8; 4]; 64] = [
     [2, 2, 2, 2],
 ];
 
+/// The context variable after one decoded bin, at `lps << 7 | ctx`.
+///
+/// `ctx` is the context variable the bin was decoded with, packed as
+/// `pStateIdx << 1 | valMps`, and `lps` is 1 when the bin was the least
+/// probable symbol. This is Table 9-47 with the `valMps` flip of clause
+/// 9.3.4.3.2.2 folded in, so that the engine picks the next state with one
+/// load instead of a branch on the bin.
+pub static NEXT_CTX: [u8; 256] = next_ctx();
+
+const fn next_ctx() -> [u8; 256] {
+    let mut out = [0u8; 256];
+    let mut s = 0;
+    while s < 128 {
+        let state = s >> 1;
+        let mps = (s & 1) as u8;
+        out[s] = (TRANS_IDX_MPS[state] << 1) | mps;
+        let flipped = if state == 0 { 1 - mps } else { mps };
+        out[128 | s] = (TRANS_IDX_LPS[state] << 1) | flipped;
+        s += 1;
+    }
+    out
+}
+
 /// `transIdxLps[pStateIdx]`, Table 9-47.
-pub static TRANS_IDX_LPS: [u8; 64] = [
+pub const TRANS_IDX_LPS: [u8; 64] = [
     0, 0, 1, 2, 2, 4, 4, 5, 6, 7, 8, 9, 9, 11, 11, 12, 13, 13, 15, 15, 16, 16, 18, 18, 19, 19, 21,
     21, 22, 22, 23, 24, 24, 25, 26, 26, 27, 27, 28, 29, 29, 30, 30, 30, 31, 32, 32, 33, 33, 33, 34,
     34, 35, 35, 35, 36, 36, 36, 37, 37, 37, 38, 38, 63,
 ];
 
 /// `transIdxMps[pStateIdx]`, Table 9-47.
-pub static TRANS_IDX_MPS: [u8; 64] = [
+pub const TRANS_IDX_MPS: [u8; 64] = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
     51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 62, 63,

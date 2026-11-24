@@ -8,7 +8,7 @@
 //! the buffered bits are always below the scaled range's resolution.
 
 use super::ctx::{INIT_VALUES, NUM_CTX};
-use super::tables::{RANGE_TAB_LPS, TRANS_IDX_LPS, TRANS_IDX_MPS};
+use super::tables::{NEXT_CTX, RANGE_TAB_LPS};
 use crate::hevc::error::{Error, Result};
 
 /// Number of zero bytes the engine may synthesise past the end of a substream.
@@ -142,8 +142,44 @@ impl<'a> Cabac<'a> {
     }
 
     /// `DecodeDecision`: decodes one bin with context variable `ctx_idx`.
+    ///
+    /// Whether the bin is the most or the least probable symbol is as good as
+    /// random to a branch predictor, so both outcomes are computed and the
+    /// right one selected with a mask, and the renormalisation (no shift, one
+    /// shift, or up to six after the least probable symbol) is one shift by a
+    /// count worked out from the new range.
     #[inline(always)]
     pub fn decision(&mut self, ctx_idx: usize) -> u32 {
+        let s = self.ctx[ctx_idx];
+        let state = usize::from((s >> 1) & 63);
+        let lps = u32::from(RANGE_TAB_LPS[state][((self.range >> 6) & 3) as usize]);
+        let mps_range = self.range - lps;
+        let scaled = mps_range << 7;
+        let is_lps = u32::from(self.value >= scaled);
+        let mask = is_lps.wrapping_neg();
+        self.value -= scaled & mask;
+        let range = mps_range ^ ((mps_range ^ lps) & mask);
+        self.ctx[ctx_idx] = NEXT_CTX[((is_lps as usize) << 7) | usize::from(s & 127)];
+        // The range is never zero: `| 1` tells the compiler so, and changes no
+        // count. It ends at 256 or more: no shift or one after the most
+        // probable symbol, at least one after the least.
+        let shift = (range | 1).leading_zeros() - 23;
+        self.range = range << shift;
+        self.value <<= shift;
+        self.bits_needed += shift as i32;
+        if self.bits_needed >= 0 {
+            let b = self.fetch();
+            self.value |= b << self.bits_needed;
+            self.bits_needed -= 8;
+        }
+        u32::from(s & 1) ^ is_lps
+    }
+
+    /// `DecodeDecision` as clause 9.3.4.3.2 writes it, a branch on the bin:
+    /// what the tests hold [`Cabac::decision`] to.
+    #[cfg(test)]
+    pub(super) fn decision_reference(&mut self, ctx_idx: usize) -> u32 {
+        use super::tables::{TRANS_IDX_LPS, TRANS_IDX_MPS};
         let s = self.ctx[ctx_idx];
         let state = ((s >> 1) & 63) as usize;
         let mps = u32::from(s & 1);
@@ -161,7 +197,6 @@ impl<'a> Cabac<'a> {
             mps
         } else {
             self.value -= scaled;
-            // rangeTabLps is at most 240, so at least one shift is needed.
             let shift = lps.leading_zeros() - 23;
             self.range = lps << shift;
             self.value <<= shift;
@@ -175,6 +210,12 @@ impl<'a> Cabac<'a> {
             self.ctx[ctx_idx] = (TRANS_IDX_LPS[state] << 1) | new_mps as u8;
             1 - mps
         }
+    }
+
+    /// The engine's whole state, for the tests to compare two engines by.
+    #[cfg(test)]
+    pub(super) fn snapshot(&self) -> (usize, u32, u32, i32) {
+        (self.next, self.range, self.value, self.bits_needed)
     }
 
     /// `DecodeBypass`: decodes one bin with the equiprobable model.
