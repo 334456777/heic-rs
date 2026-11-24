@@ -20,7 +20,7 @@ pub use sets::ParameterSets;
 use crate::hevc::error::{Error, Result};
 use crate::hevc::filter::{CtbFilter, FilterInfo, deblock, sao};
 use crate::hevc::nal::{NalHeader, Rbsp};
-use crate::hevc::picture::Picture;
+use crate::hevc::picture::{Picture, Plane};
 use crate::hevc::ps::scaling;
 use crate::hevc::slice::{SliceHeader, parse as parse_slice_header};
 use crate::hevc::{ChromaFormat, Frame};
@@ -101,7 +101,7 @@ pub fn decode(sets: &ParameterSets, slices: &[&[u8]]) -> Result<Frame> {
     }
     deblock(&mut pic, &fi);
     sao(&mut pic, &fi);
-    Ok(crop(&pic, sps))
+    Ok(crop(pic, sps))
 }
 
 /// Derives the scaling factors in force for the picture, if any.
@@ -120,8 +120,13 @@ fn scaling_factors(
     Some(scaling::derive(&data, sps.chroma_array_type))
 }
 
-/// Applies the conformance window and packs the planes into a [`Frame`].
-fn crop(pic: &Picture, sps: &crate::hevc::ps::Sps) -> Frame {
+/// Applies the conformance window and makes the planes a [`Frame`].
+///
+/// A window that starts at the picture's top left corner, which is how an
+/// encoder pads a picture to whole coding blocks, keeps the planes as they
+/// are: the rows stay `stride` samples apart and the samples to the right of
+/// the window are simply not read. Any other window is copied out.
+fn crop(pic: Picture, sps: &crate::hevc::ps::Sps) -> Frame {
     let [l, r, t, b] = sps.crop;
     let w = sps.width.saturating_sub(l + r).max(1);
     let h = sps.height.saturating_sub(t + b).max(1);
@@ -135,6 +140,25 @@ fn crop(pic: &Picture, sps: &crate::hevc::ps::Sps) -> Frame {
     } else {
         (w / sw, h / sh)
     };
+    let chroma = ChromaFormat::from_idc(sps.chroma_array_type).unwrap_or(ChromaFormat::Monochrome);
+    if l == 0 && t == 0 {
+        let Picture { y, cb, cr, .. } = pic;
+        let rows = |mut p: Plane, n: usize| {
+            p.data.truncate(p.stride * n);
+            p.data
+        };
+        return Frame {
+            width: w as u32,
+            height: h as u32,
+            bit_depth: sps.bit_depth_y,
+            chroma,
+            y_stride: y.stride as u32,
+            c_stride: cb.stride as u32,
+            y: rows(y, h),
+            cb: rows(cb, ch),
+            cr: rows(cr, ch),
+        };
+    }
     let mut y = Vec::with_capacity(w * h);
     for j in 0..h {
         let o = (t + j) * pic.y.stride + l;
@@ -151,7 +175,7 @@ fn crop(pic: &Picture, sps: &crate::hevc::ps::Sps) -> Frame {
         width: w as u32,
         height: h as u32,
         bit_depth: sps.bit_depth_y,
-        chroma: ChromaFormat::from_idc(sps.chroma_array_type).unwrap_or(ChromaFormat::Monochrome),
+        chroma,
         y,
         cb,
         cr,
